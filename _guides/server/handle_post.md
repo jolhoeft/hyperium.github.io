@@ -20,18 +20,18 @@ The basic approach to handling posts is to take the requst body (which
 implements `futures::stream::Stream`) and apply a series of adapters
 until it is transformed into response futures (`Service::Future`,
 which is `Box<Future<Item = Self::Response, Error = Self::Error>>` in
-the `params.rs` example). You might think it would be easier to
-transform the request body directly into the response body. However,
-that approach makes it difficult to exit early if there is a problem,
-such as a malformed request or a service is unavailable. Small quickly
-rendered response bodies can be generated as part of the response
-future. Larger responses that may take time to stream to the client
-will need to be generated in a separate stream for the response body.
+the `params.rs` example). While it appears easier to transform the
+request body directly into the response body, that approach makes it
+difficult to exit early if there is a problem, such as a malformed
+request or a service is unavailable. Small quickly rendered response
+bodies can be generated as part of the response future. Larger
+responses that may take time to stream to the client will need to be
+generated in a separate stream for the response body.
 
 ## Setup
 
 The basic structure of the `'params.rs` example is the same as in the
-[Echo, echo, echo](./echo) example. Aside from handling Post, which we
+[Echo, echo, echo](./echo) guide. Aside from handling Post, which we
 discuss below, the key differences are:
 
 Import the `url` crate for form parsing:
@@ -134,11 +134,7 @@ client. To parse a Json Post:
 }))
 ```
 
-Finally we generate the response body.
-
-### More Complex Response Bodies
-
-Todo:
-
- * spawn a thread to read the filesystem or query a database
- * web service query - can that be done purely via hyper/futures w/o a thread?
+Finally we generate the response body. In this case the body is a
+simple string. More complex approaches, such as database queries or
+web service calls, are addressed in the [Response
+Strategies](./response_strategies) guide.
