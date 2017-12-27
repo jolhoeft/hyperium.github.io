@@ -34,9 +34,123 @@ stream is created and the handle passed to the stream.
 
 At the time of this writing, there is no cross platform way of
 accessing the filesystem with futures. We will use blocking I/O in a
-separate thread.
+separate thread. This generalizes to anything that needs to run in a
+separate thread, such as database access or long computations.
 
-Todo: write me!
+### Simple File Serving
+
+For small files, we can do all the work in one thread:
+
+```rust
+fn simple_file_send(f: &str) -> Box<Future<Item = Response, Error = hyper::Error>> {
+    let filename = f.to_string(); // we need to copy for lifetime issues
+    let (tx, rx) = oneshot::channel();
+    thread::spawn(move || {
+        let mut file = match File::open(filename) {
+            Ok(f) => f,
+            Err(_) => {
+                tx.send(Response::new()
+                        .with_status(StatusCode::NotFound)
+                        .with_header(ContentLength(NOTFOUND.len() as u64))
+                        .with_body(NOTFOUND))
+                    .expect("Send error on open");
+                return;
+            },
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        match copy(&mut file, &mut buf) {
+            Ok(_) => {
+                let res = Response::new()
+                    .with_header(ContentLength(buf.len() as u64))
+                    .with_body(buf);
+                tx.send(res).expect("Send error on successful file read");
+            },
+            Err(_) => {
+                tx.send(Response::new().with_status(StatusCode::InternalServerError)).
+                    expect("Send error on error reading file");
+            },
+        };
+    });
+
+    Box::new(rx.map_err(|e| Error::from(io::Error::new(io::ErrorKind::Other, e))))
+}
+```
+
+We use `futures::sync::oneshot` to communicate with our spawn thread.
+First, we attempt to open the file, returning a 404 if the file does
+not exists. Next we read whole file into a Vec<u8> buffer. Finally we
+create the Response with the buffer as the body, and send the Response
+out the oneshot channel.
+
+There are two principle drawbacks to this approach. First, since we
+read the entire file into memory, serving many large files has the
+potential to exhaust our memory. Second, we cannot start sending data
+until the fiile has been read, increasing the latency of our response
+for larger files.
+
+### Streaming Files
+
+We can address the problem of the single threaded approach by spwaning
+a second thread in the first to stream the file in smaller chunks. We
+need to use two thread because the Response body stream cannot change
+the status of the Response, but some i/o operations, e.g. File::open,
+may return errors require a different response. These operation all
+need to take place in the top level thread, before the Response body
+thread is spawned.
+
+```rust
+fn stream_file(f: &str) -> Box<Future<Item = Response, Error = hyper::Error>> {
+    let filename = f.to_string(); // we need to copy for lifetime issues
+    let (tx, rx) = oneshot::channel();
+    thread::spawn(move || {
+        let mut file = match File::open(filename) {
+            Ok(f) => f,
+            Err(_) => {
+                tx.send(Response::new()
+                        .with_status(StatusCode::NotFound)
+                        .with_header(ContentLength(NOTFOUND.len() as u64))
+                        .with_body(NOTFOUND))
+                    .expect("Send error on open");
+                return;
+            },
+        };
+        let (mut tx_body, rx_body) = mpsc::channel(1);
+        thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            loop {
+                match file.read(&mut buf) {
+                    Ok(n) => {
+                        if n == 0 {
+                            // eof
+                            tx_body.close().expect("panic closing");
+                            break;
+                        } else {
+                            let chunk: Chunk = buf.to_vec().into();
+                            match tx_body.send(Ok(chunk)).wait() {
+                                Ok(t) => { tx_body = t; },
+                                Err(_) => { break; }
+                            };
+                        }
+                    },
+                    Err(_) => { break; }
+                }
+            }
+        });
+        let res = Response::new().with_body(rx_body);
+        tx.send(res).expect("Send error on successful file read");
+    });
+
+    Box::new(rx.map_err(|e| Error::from(io::Error::new(io::ErrorKind::Other, e))))
+}
+```
+
+We attempt to open the file and handle any errors the same as in the
+simple case. We then create an mpsc:channel to stream the file data
+on, and spawn a thread to do the actual reading.
+
+Todo: Make sure this double threaded approach is actually
+necessary. We might be able to hand off the Response then process the
+streaming.
 
 ### Data Bases
 
