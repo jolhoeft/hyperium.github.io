@@ -7,14 +7,24 @@ title: Response Strategies
 The [Echo, echo, echo](./echo) guide discusses how to transform
 request bodies into response bodys, and the [Handling
 Posts](./handle_post) guide discusses processing more complex request
-bodies bodies. We will now look into more advanced ways of generating
-responses. Three use cases are considered: server files from the file
-system, querying and rendering data from a database, and rendering a
-response from a web service. The first two will involve processing on
-a separate thread, while web services will be handled with hyper's
-client support and be a purely futures based approach. A working
-example of what we cover here is provided in the hyper distribution at
-[responding.rs](https://github.com/hyperium/hyper/blob/master/examples/responding.rs).
+bodies. We will now look into more advanced ways of generating
+responses.
+
+Two basic approaches are examined. The first handles blocking i/o or
+long processing times. These require a separate thread and the
+`futures` crate's channels. We will discuss the threaded approach in
+the context of serving files to a client, but this is readily adapted
+to database access and/or complex page rendering. A working example of
+file serving is included in the hyper distribution at
+[send_file.rs](https://github.com/hyperium/hyper/blob/master/examples/send_file.rs).
+
+The second approach illustrates how to use `tokio` aware i/o. We will
+illustrate it by accessing a simple web based api. In some ways this
+is simpler than the threaded approach, but the setup of our server is
+more complex. We will need access to the underlying `tokio` engine to
+handle our queries. A working example of web api access is included in
+the hyper distribution at
+[web_api.rs](https://github.com/hyperium/hyper/blob/master/examples/web_api.rs).
 
 We start with extracting the query information from the request (which
 can be from form parameters, cookies, headers, etc, but this guide
@@ -77,16 +87,16 @@ fn simple_file_send(f: &str) -> Box<Future<Item = Response, Error = hyper::Error
 }
 ```
 
-We use `futures::sync::oneshot` to communicate with our spawn thread.
-First, we attempt to open the file, returning a 404 if the file does
-not exists. Next we read whole file into a Vec<u8> buffer. Finally we
-create the Response with the buffer as the body, and send the Response
-out the oneshot channel.
+We use `futures::sync::oneshot` to communicate with our spawned
+thread.  First, we attempt to open the file, returning a 404 if the
+file does not exists. Next we read whole file into a `Vec<u8>`
+buffer. Finally we create the Response with the buffer as the body,
+and send the Response out the oneshot channel.
 
 There are two principle drawbacks to this approach. First, since we
 read the entire file into memory, serving many large files has the
 potential to exhaust our memory. Second, we cannot start sending data
-until the fiile has been read, increasing the latency of our response
+until the file has been read, increasing the latency of our response
 for larger files.
 
 ### Streaming Files
@@ -94,8 +104,8 @@ for larger files.
 We can address the problem of the single threaded approach by using a
 second `mpsc::channel` to stream the file in smaller chunks. We need
 to use two channels because the Response body stream cannot change the
-status of the Response, but some i/o operations, e.g. File::open, may
-return errors requiring a different response. These operation all need
+status of the Response, but some i/o operations, e.g. `File::open`, may
+return errors requiring a different response. These operations all need
 to take place before the Response future is sent over the oneshot,
 before the loop that streams the Response body is started.
 
