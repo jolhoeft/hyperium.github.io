@@ -39,7 +39,8 @@ separate thread, such as database access or long computations.
 
 ### Simple File Serving
 
-For small files, we can do all the work in one thread:
+For small files, we can do all the work with a single
+`oneshot::channel`:
 
 ```rust
 fn simple_file_send(f: &str) -> Box<Future<Item = Response, Error = hyper::Error>> {
@@ -90,13 +91,13 @@ for larger files.
 
 ### Streaming Files
 
-We can address the problem of the single threaded approach by spwaning
-a second thread in the first to stream the file in smaller chunks. We
-need to use two thread because the Response body stream cannot change
-the status of the Response, but some i/o operations, e.g. File::open,
-may return errors require a different response. These operation all
-need to take place in the top level thread, before the Response body
-thread is spawned.
+We can address the problem of the single threaded approach by using a
+second `mpsc::channel` to stream the file in smaller chunks. We need
+to use two channels because the Response body stream cannot change the
+status of the Response, but some i/o operations, e.g. File::open, may
+return errors requiring a different response. These operation all need
+to take place before the Response future is sent over the oneshot,
+before the loop that streams the Response body is started.
 
 ```rust
 fn stream_file(f: &str) -> Box<Future<Item = Response, Error = hyper::Error>> {
@@ -115,29 +116,27 @@ fn stream_file(f: &str) -> Box<Future<Item = Response, Error = hyper::Error>> {
             },
         };
         let (mut tx_body, rx_body) = mpsc::channel(1);
-        thread::spawn(move || {
-            let mut buf = [0u8; 4096];
-            loop {
-                match file.read(&mut buf) {
-                    Ok(n) => {
-                        if n == 0 {
-                            // eof
-                            tx_body.close().expect("panic closing");
-                            break;
-                        } else {
-                            let chunk: Chunk = buf.to_vec().into();
-                            match tx_body.send(Ok(chunk)).wait() {
-                                Ok(t) => { tx_body = t; },
-                                Err(_) => { break; }
-                            };
-                        }
-                    },
-                    Err(_) => { break; }
-                }
-            }
-        });
         let res = Response::new().with_body(rx_body);
         tx.send(res).expect("Send error on successful file read");
+        let mut buf = [0u8; 4096];
+        loop {
+            match file.read(&mut buf) {
+                Ok(n) => {
+                    if n == 0 {
+                        // eof
+                        tx_body.close().expect("panic closing");
+                        break;
+                    } else {
+                        let chunk: Chunk = buf.to_vec().into();
+                        match tx_body.send(Ok(chunk)).wait() {
+                            Ok(t) => { tx_body = t; },
+                            Err(_) => { break; }
+                        };
+                    }
+                },
+                Err(_) => { break; }
+            }
+        }
     });
 
     Box::new(rx.map_err(|e| Error::from(io::Error::new(io::ErrorKind::Other, e))))
@@ -145,16 +144,13 @@ fn stream_file(f: &str) -> Box<Future<Item = Response, Error = hyper::Error>> {
 ```
 
 We attempt to open the file and handle any errors the same as in the
-simple case. We then create an mpsc:channel to stream the file data
-on, and spawn a thread to do the actual reading.
+simple case. We then create an `mpsc:channel` to stream the file data,
+and create a Response future with the receiving end of the
+`mpsc::channel` as the respone body. We send the Response out the
+`oneshot::channel`, and start streaming the file into the body.
 
-Todo: Make sure this double threaded approach is actually
-necessary. We might be able to hand off the Response then process the
-streaming.
-
-### Data Bases
-
-Todo: write me!
+When in doubt, use the two channel streaming approach. This will work
+with small data quanities at a small overhead cost.
 
 ## Web Services
 
