@@ -160,7 +160,8 @@ and create a Response future with the receiving end of the
 `oneshot::channel`, and start streaming the file into the body.
 
 When in doubt, use the two channel streaming approach. This will work
-with small data quanities at a small overhead cost.
+with small data quanities at a small overhead cost, and scale safely
+to large quantities of data.
 
 ## Web Services
 
