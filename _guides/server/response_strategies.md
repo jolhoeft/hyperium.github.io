@@ -5,7 +5,7 @@ title: Response Strategies
 ## Overview
 
 The [Echo, echo, echo](./echo) guide discusses how to transform
-request bodies into response bodys, and the [Handling
+request bodies into response bodies, and the [Handling
 Posts](./handle_post) guide discusses processing more complex request
 bodies. We will now look into more advanced ways of generating
 responses.
