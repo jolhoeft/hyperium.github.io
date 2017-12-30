@@ -52,7 +52,7 @@ separate thread, such as database access or long computations.
 We will start with a simple approach that reads the entire file into a
 buffer. This is only appropriate for small quanities of data, such as
 a single data base row, or situations where all the long processing
-take place before the buffer is generated.
+takes place before the buffer is generated.
 
 ```rust
 fn simple_file_send(f: &str) -> Box<Future<Item = Response, Error = hyper::Error>> {
@@ -62,7 +62,7 @@ fn simple_file_send(f: &str) -> Box<Future<Item = Response, Error = hyper::Error
 
 For small files, we can do all the work with a single
 `futures::sync::oneshot::channel` to communicate with our spawned
-thread:
+thread.
 
 
 ```rust
@@ -202,4 +202,81 @@ to large quantities of data.
 
 ## Web Services
 
-Todo: write me!
+Outline
+
+* Overview
+  * Change to Service::Response, ResponseStream and why
+  * Service also needs a tokio::reactor::Handle
+  * Launching server needs to be unpacked
+* Service
+  * Design changes (ResponseStream and tokio::reactor::Handle)
+  * /web_api
+  * /test.html
+    * Client creation
+	* Mapping the client future
+* Server creation
+  * Manually create tokio reactor
+  * Pass handle to Service
+
+Using `tokio` aware i/o removes the need for separate
+threads. However, building the server is more complex so we can pass a
+handle to the tokio reactor to our service. Our service needs this
+handle to launch `tokio` based i/o.
+
+Mapping the responses to our web queries to the bobidies of our
+responses does not result in a `hyper::Body`. The most straightforward
+way of dealing with this is to use a trait object as the body type of
+our Service::Response.
+
+### The ResponseExamples Service
+
+We need a handle to a tokio reactor to create web queries, so we make
+it part of our `Service`:
+
+```rust
+struct ResponseExamples(tokio_core::reactor::Handle);
+```
+
+The various transforms we need to perfom on our web request streams to
+get to our response body streams result in some fairly complex
+types. The easiest way to deal with these is to define our
+Service::Response to use a trait object instead of `hyper::Body`. Our
+code will be more clear if we define this as a type:
+
+```rust
+pub type ResponseStream = Box<Stream<Item=Chunk, Error=Error>>;
+
+impl Service for ResponseExamples {
+    type Request = Request;
+    type Response = Response<ResponseStream>;
+    type Error = hyper::Error;
+    type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
+```
+
+Since `hyper::Body` implements `Stream<Item=Chunk, Error=Error>`, it
+can be easily converted to this type with `Box`, for example:
+
+```rust
+let body: ResponseStream = Box::new(Body::from("A simple response"));
+```
+
+#### /web_api
+
+The web api we will test against is a simple uppercasing as discussed
+in [Echo, echo, echo](./echo):
+
+```rust
+            (&Post, "/web_api") => {
+                let body: ResponseStream = Box::new(req.body().map(|chunk| {
+                    let upper = chunk.iter()
+					    .map(|byte| byte.to_ascii_uppercase())
+                        .collect::<Vec<u8>>();
+                    Chunk::from(upper)
+                }));
+                Box::new(futures::future::ok(Response::new().with_body(body)))
+            },
+```
+
+#### /test.html
+
+### Building the Server
