@@ -34,7 +34,7 @@ Self::Response, Error = Self::Error>>` here). Finally, the response
 body stream is assigned.
 
 All the operations that can affect the response status code need to
-take place the response future, not the response body stream. The
+take place in the response future, not the response body stream. The
 response body stream cannot change the status of the response. For
 example, if that stream tries to open a file that does not exist, it
 cannot return a 404. The file needs to be opened before the body
@@ -49,13 +49,23 @@ separate thread, such as database access or long computations.
 
 ### Simple File Serving
 
-For small files, we can do all the work with a single
-`oneshot::channel`:
+We will start with a simple approach that reads the entire file into a
+buffer. This is only appropriate for small quanities of data, such as
+a single data base row, or situations where all the long processing
+take place before the buffer is generated.
 
 ```rust
 fn simple_file_send(f: &str) -> Box<Future<Item = Response, Error = hyper::Error>> {
     let filename = f.to_string(); // we need to copy for lifetime issues
     let (tx, rx) = oneshot::channel();
+```
+
+For small files, we can do all the work with a single
+`futures::sync::oneshot::channel` to communicate with our spawned
+thread:
+
+
+```rust
     thread::spawn(move || {
         let mut file = match File::open(filename) {
             Ok(f) => f,
@@ -68,6 +78,12 @@ fn simple_file_send(f: &str) -> Box<Future<Item = Response, Error = hyper::Error
                 return;
             },
         };
+```
+
+First, we attempt to open the file, returning a 404 if the file does
+not exists.
+
+```rust		
         let mut buf: Vec<u8> = Vec::new();
         match copy(&mut file, &mut buf) {
             Ok(_) => {
@@ -82,16 +98,20 @@ fn simple_file_send(f: &str) -> Box<Future<Item = Response, Error = hyper::Error
             },
         };
     });
+```
 
+Next we read whole file into a `Vec<u8>` buffer. We send a Response
+with the buffer as the body out the transmit channel. On an error, we
+instead return an Internal Service Error.
+
+```rust		
     Box::new(rx.map_err(|e| Error::from(io::Error::new(io::ErrorKind::Other, e))))
 }
 ```
 
-We use `futures::sync::oneshot` to communicate with our spawned
-thread.  First, we attempt to open the file, returning a 404 if the
-file does not exists. Next we read whole file into a `Vec<u8>`
-buffer. Finally we create the Response with the buffer as the body,
-and send the Response out the oneshot channel.
+Finally, we box the receive side of the channel as the Response
+future. Note that we need to map the channel's error to a
+`hyper::Error`.
 
 There are two principle drawbacks to this approach. First, since we
 read the entire file into memory, serving many large files has the
@@ -125,9 +145,22 @@ fn stream_file(f: &str) -> Box<Future<Item = Response, Error = hyper::Error>> {
                 return;
             },
         };
+```
+
+We begin the same as the simple approach.
+
+```rust
         let (mut tx_body, rx_body) = mpsc::channel(1);
         let res = Response::new().with_body(rx_body);
         tx.send(res).expect("Send error on successful file read");
+```
+
+Here we create an `mpsc::channel` for the response body. We create a
+Response with the receive side of the `mpsc::channel` as the body, and
+send it out the `oneshot::channel`.
+
+
+```rust
         let mut buf = [0u8; 4096];
         loop {
             match file.read(&mut buf) {
@@ -148,16 +181,20 @@ fn stream_file(f: &str) -> Box<Future<Item = Response, Error = hyper::Error>> {
             }
         }
     });
+```
 
+We create a buffer, and loop through file sending buffer sized chunks
+until we reach the end of the file. On errors we simply exit the
+thread, but in practice some sort of logging would be appropriate.
+
+
+```rust
     Box::new(rx.map_err(|e| Error::from(io::Error::new(io::ErrorKind::Other, e))))
 }
 ```
 
-We attempt to open the file and handle any errors the same as in the
-simple case. We then create an `mpsc:channel` to stream the file data,
-and create a Response future with the receiving end of the
-`mpsc::channel` as the respone body. We send the Response out the
-`oneshot::channel`, and start streaming the file into the body.
+Finally, we box up the receive channel of the oneshot as in the simple
+case.
 
 When in doubt, use the two channel streaming approach. This will work
 with small data quanities at a small overhead cost, and scale safely
