@@ -262,14 +262,16 @@ let body: ResponseStream = Box::new(Body::from("A simple response"));
 
 #### /web_api
 
-The web api we will test against is a simple uppercasing as discussed
-in [Echo, echo, echo](./echo):
+For the purposes of this example, we will include a web api to test
+against, but normally one would connect to a different service. Our
+web api is a simple uppercasing as discussed in [Echo, echo,
+echo](./echo):
 
 ```rust
             (&Post, "/web_api") => {
                 let body: ResponseStream = Box::new(req.body().map(|chunk| {
                     let upper = chunk.iter()
-					    .map(|byte| byte.to_ascii_uppercase())
+                        .map(|byte| byte.to_ascii_uppercase())
                         .collect::<Vec<u8>>();
                     Chunk::from(upper)
                 }));
@@ -278,5 +280,46 @@ in [Echo, echo, echo](./echo):
 ```
 
 #### /test.html
+
+Here we make our query to a web service.
+
+```rust
+            (&Get, "/test.html") => {
+                let lowercase = b"i am a lower case string";
+
+                let client = Client::configure().build(&self.0);
+                let mut req = Request::new(Post, "http://127.0.0.1:1337/web_api".parse().unwrap());
+                req.set_body(lowercase);
+                let web_res_future = client.request(req);
+```
+
+We start by creating a hyper client with a post request. Client
+programming is discussed in detail in the Client portion of these
+guides. The [Advanced Client Usage](../client/advanced) page discusses
+how to create and process Posts. Since we already have a handle to the
+tokio reactor, we do not need to create one here. `web_res_future` is
+a Future containing the results of our query.
+
+```rust
+                Box::new(web_res_future.map(|web_res| {
+                    let body: ResponseStream = Box::new(web_res.body().map(|b| {
+                        Chunk::from(format!("before: '{:?}'<br>after: '{:?}'",
+                                            std::str::from_utf8(lowercase).unwrap(),
+                                            std::str::from_utf8(&b).unwrap()))
+                    }));
+                    Response::new().with_body(body)
+                }))
+            },
+```
+
+Here we map the `web_res_future` into a `Response`. Within that
+mapping, we map the web query's body into a body for our
+`Response`. In this case it is a simple before and after
+comparison. We `Box` the `Response` and return it as our result.
+
+In this example, any errors in `web_res_future` are simply passed on
+in our response. More robust design would unpack those errors and set
+appropriate status codes. Retries or default responses may also be
+impllemented depending on the application.
 
 ### Building the Server
