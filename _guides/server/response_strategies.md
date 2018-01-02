@@ -323,3 +323,29 @@ appropriate status codes. Retries or default responses may also be
 impllemented depending on the application.
 
 ### Building the Server
+
+In earlier examples, we could let Http::bind take care of creating and
+running the tokio objects. However, since we wish to create outgoing
+http connections in addition to handling incoming, we need to set
+things up ourselves.
+
+```rust
+    let mut core = tokio_core::reactor::Core::new().unwrap();
+    let server_handle = core.handle();
+    let client_handle = core.handle();
+```
+
+Create the tokio core
+
+```
+    let serve = Http::new().serve_addr_handle(&addr, &server_handle, move || Ok(ResponseExamples(client_handle.clone()))).unwrap();
+    println!("Listening on http://{} with 1 thread.", serve.incoming_ref().local_addr());
+
+    let h2 = server_handle.clone();
+    server_handle.spawn(serve.for_each(move |conn| {
+        h2.spawn(conn.map(|_| ()).map_err(|err| println!("serve error: {:?}", err)));
+        Ok(())
+    }).map_err(|_| ()));
+
+    core.run(futures::future::empty::<(), ()>()).unwrap();
+```
