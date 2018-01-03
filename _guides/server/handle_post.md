@@ -1,5 +1,6 @@
 ---
 title: Handling Posts
+layout: guide
 ---
 
 ## Overview
@@ -16,17 +17,17 @@ will start by discussing key aspects of that example, then address how
 to modify the approach for handling other types of posted data and
 rendered responses.
 
-The basic approach to handling posts is to take the requst body (which
-implements `futures::stream::Stream`) and apply a series of adapters
-until it is transformed into response futures (`Service::Future`,
-which is `Box<Future<Item = Self::Response, Error = Self::Error>>` in
-the `params.rs` example). While it appears easier to transform the
-request body directly into the response body, that approach makes it
-difficult to exit early if there is a problem, such as a malformed
-request or a service is unavailable. Small quickly rendered response
-bodies can be generated as part of the response future. Larger
-responses that may take time to stream to the client will need to be
-generated in a separate stream for the response body.
+The basic approach to handling posts is to take the request body
+(which implements `futures::stream::Stream`) and apply a series of
+adapters until it is transformed into response future
+(`Service::Future`, which is `Box<Future<Item = Self::Response, Error
+= Self::Error>>` in the `params.rs` example). While it appears easier
+to transform the request body directly into the response body, that
+approach makes it difficult to exit early if there is a problem, such
+as a malformed request or a service is unavailable. Small quickly
+rendered response bodies can be generated as part of the response
+future. Larger responses that may take time to stream to the client
+will need to be generated in a separate stream from the response body.
 
 ## Setup
 

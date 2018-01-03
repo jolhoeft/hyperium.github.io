@@ -1,5 +1,6 @@
 ---
 title: Response Strategies
+layout: guide
 ---
 
 ## Overview
@@ -81,7 +82,7 @@ thread.
 ```
 
 First, we attempt to open the file, returning a 404 if the file does
-not exists.
+not exist.
 
 ```rust		
         let mut buf: Vec<u8> = Vec::new();
@@ -121,13 +122,13 @@ for larger files.
 
 ### Streaming Files
 
-We can address the problem of the single threaded approach by using a
+We can address the problem of the single channel approach by using a
 second `mpsc::channel` to stream the file in smaller chunks. We need
 to use two channels because the Response body stream cannot change the
-status of the Response, but some i/o operations, e.g. `File::open`, may
-return errors requiring a different response. These operations all need
-to take place before the Response future is sent over the oneshot,
-before the loop that streams the Response body is started.
+status of the Response, but some i/o operations, e.g. `File::open`,
+may return errors requiring a different response. These operations all
+need to take place before the Response future is sent over the
+oneshot, before the loop that streams the Response body is started.
 
 ```rust
 fn stream_file(f: &str) -> Box<Future<Item = Response, Error = hyper::Error>> {
@@ -202,28 +203,12 @@ to large quantities of data.
 
 ## Web Services
 
-Outline
-
-* Overview
-  * Change to Service::Response, ResponseStream and why
-  * Service also needs a tokio::reactor::Handle
-  * Launching server needs to be unpacked
-* Service
-  * Design changes (ResponseStream and tokio::reactor::Handle)
-  * /web_api
-  * /test.html
-    * Client creation
-	* Mapping the client future
-* Server creation
-  * Manually create tokio reactor
-  * Pass handle to Service
-
 Using `tokio` aware i/o removes the need for separate
 threads. However, building the server is more complex so we can pass a
 handle to the tokio reactor to our service. Our service needs this
 handle to launch `tokio` based i/o.
 
-Mapping the responses to our web queries to the bobidies of our
+Mapping the responses to our web queries to the bodies of our
 responses does not result in a `hyper::Body`. The most straightforward
 way of dealing with this is to use a trait object as the body type of
 our Service::Response.
@@ -320,7 +305,7 @@ comparison. We `Box` the `Response` and return it as our result.
 In this example, any errors in `web_res_future` are simply passed on
 in our response. More robust design would unpack those errors and set
 appropriate status codes. Retries or default responses may also be
-impllemented depending on the application.
+implemented depending on the application.
 
 ### Building the Server
 
@@ -335,17 +320,32 @@ things up ourselves.
     let client_handle = core.handle();
 ```
 
-Create the tokio core
+Create the tokio core. `server_handle` is for server support handled
+by `Http::bind` in other guides. `client_handle` is the `Core` handle
+that we will use when creating web requests.
 
-```
+```rust
     let serve = Http::new().serve_addr_handle(&addr, &server_handle, move || Ok(ResponseExamples(client_handle.clone()))).unwrap();
     println!("Listening on http://{} with 1 thread.", serve.incoming_ref().local_addr());
+```
 
+Set up the `serve` `Stream`, which is a `futures::stream::Stream` of
+`Connections`.
+
+
+```rust
     let h2 = server_handle.clone();
     server_handle.spawn(serve.for_each(move |conn| {
         h2.spawn(conn.map(|_| ()).map_err(|err| println!("serve error: {:?}", err)));
         Ok(())
     }).map_err(|_| ()));
+```
 
+Set up processing for each incoming connection.
+
+
+```rust
     core.run(futures::future::empty::<(), ()>()).unwrap();
 ```
+
+Run the Core to listen for connections.
